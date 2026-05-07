@@ -164,4 +164,15 @@ describe("prepareMacLaunchConfig", () => {
       await rm(root, { force: true, recursive: true });
     }
   });
+
+  it("returns null when the build output config has been removed", async () => {
+    const root = await mkdtemp(join(tmpdir(), "open-design-tools-pack-mac-"));
+    try {
+      const config = makeConfig(root);
+
+      await expect(prepareMacLaunchConfig(config)).resolves.toBeNull();
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
 });

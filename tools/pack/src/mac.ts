@@ -308,10 +308,15 @@ async function seedPackagedAppConfig(config: ToolPackConfig): Promise<void> {
   await writeFile(targetPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
 }
 
-async function prepareMacLaunchConfig(config: ToolPackConfig): Promise<string> {
+async function prepareMacLaunchConfig(config: ToolPackConfig): Promise<string | null> {
   const paths = resolveMacPaths(config);
   const launchConfigPath = join(config.roots.runtime.namespaceRoot, "open-design-config.json");
-  const raw = JSON.parse(await readFile(paths.packagedConfigPath, "utf8")) as Record<string, unknown>;
+  const rawText = await readFile(paths.packagedConfigPath, "utf8").catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (rawText == null) return null;
+  const raw = JSON.parse(rawText) as Record<string, unknown>;
 
   await mkdir(dirname(launchConfigPath), { recursive: true });
   await writeFile(
@@ -1166,7 +1171,7 @@ export async function startPackedMacApp(config: ToolPackConfig): Promise<MacStar
       extraEnv: {
         ...process.env,
         [DESKTOP_LOG_ECHO_ENV]: "0",
-        [PACKAGED_CONFIG_PATH_ENV]: launchConfigPath,
+        ...(launchConfigPath == null ? {} : { [PACKAGED_CONFIG_PATH_ENV]: launchConfigPath }),
       },
       stamp,
     }),

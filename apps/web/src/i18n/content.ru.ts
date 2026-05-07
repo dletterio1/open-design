@@ -328,6 +328,7 @@ export const RU_SKILL_IDS_WITH_EN_FALLBACK = [
   'web-prototype-taste-editorial',
   'web-prototype-taste-soft',
   'waitlist-page',
+  'trading-analysis-dashboard-template',
 ] as const;
 
 export const RU_DESIGN_SYSTEM_IDS_WITH_EN_FALLBACK = [

@@ -73,6 +73,30 @@ afterEach(() => {
 });
 
 describe("startPackedMacApp", () => {
+  it("skips the launch override when the bundled config is missing", async () => {
+    const root = await mkdtemp(join(tmpdir(), "open-design-tools-pack-mac-lifecycle-"));
+    try {
+      const config = makeConfig(root);
+      const paths = resolveMacPaths(config);
+      const executablePath = join(paths.installedAppPath, "Contents", "MacOS", "Open Design");
+
+      await mkdir(join(paths.installedAppPath, "Contents", "MacOS"), { recursive: true });
+      await writeFile(executablePath, "#!/bin/sh\nexit 0\n", "utf8");
+      await chmod(executablePath, 0o755);
+
+      const result = await startPackedMacApp(config);
+      const launchConfigPath = join(config.roots.runtime.namespaceRoot, "open-design-config.json");
+      const launchEnv = spawnBackgroundProcess.mock.calls[0]?.[0]?.env as NodeJS.ProcessEnv | undefined;
+
+      expect(result.source).toBe("installed");
+      expect(result.status?.state).toBe("running");
+      expect(launchEnv?.OD_PACKAGED_CONFIG_PATH).toBeUndefined();
+      await expect(readFile(launchConfigPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
   it("passes a launch override config path for portable mac starts", async () => {
     const root = await mkdtemp(join(tmpdir(), "open-design-tools-pack-mac-lifecycle-"));
     try {

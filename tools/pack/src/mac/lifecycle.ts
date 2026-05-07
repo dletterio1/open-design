@@ -305,9 +305,18 @@ export async function installPackedMacDmg(config: ToolPackConfig): Promise<MacIn
 export async function prepareMacLaunchConfig(config: ToolPackConfig, appPath: string): Promise<string | null> {
   if (!config.portable) return null;
 
-  const raw = JSON.parse(
-    await readFile(join(appPath, "Contents", "Resources", "open-design-config.json"), "utf8"),
-  ) as Record<string, unknown>;
+  let raw: Record<string, unknown>;
+  try {
+    raw = JSON.parse(
+      await readFile(join(appPath, "Contents", "Resources", "open-design-config.json"), "utf8"),
+    ) as Record<string, unknown>;
+  } catch (error) {
+    const code = typeof error === "object" && error != null && "code" in error
+      ? String((error as { code?: unknown }).code)
+      : null;
+    if (code === "ENOENT") return null;
+    throw error;
+  }
 
   const launchConfigPath = join(config.roots.runtime.namespaceRoot, "open-design-config.json");
   await mkdir(config.roots.runtime.namespaceRoot, { recursive: true });

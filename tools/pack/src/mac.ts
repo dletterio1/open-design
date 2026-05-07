@@ -164,6 +164,7 @@ export type MacCleanupResult = {
 export type ElectronBuilderTarget = "dir" | "dmg" | "zip";
 
 const DESKTOP_LOG_ECHO_ENV = "OD_DESKTOP_LOG_ECHO";
+const PACKAGED_CONFIG_PATH_ENV = "OD_PACKAGED_CONFIG_PATH";
 const WEB_STANDALONE_HOOK_CONFIG_ENV = "OD_TOOLS_PACK_WEB_STANDALONE_HOOK_CONFIG";
 const WEB_STANDALONE_RESOURCE_NAME = "open-design-web-standalone";
 const ELECTRON_BUILDER_ASAR = false;
@@ -305,6 +306,24 @@ async function seedPackagedAppConfig(config: ToolPackConfig): Promise<void> {
 
   await mkdir(dirname(targetPath), { recursive: true });
   await writeFile(targetPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
+}
+
+async function prepareMacLaunchConfig(config: ToolPackConfig): Promise<string> {
+  const paths = resolveMacPaths(config);
+  const launchConfigPath = join(config.roots.runtime.namespaceRoot, "open-design-config.json");
+  const raw = JSON.parse(await readFile(paths.packagedConfigPath, "utf8")) as Record<string, unknown>;
+
+  await mkdir(dirname(launchConfigPath), { recursive: true });
+  await writeFile(
+    launchConfigPath,
+    `${JSON.stringify({
+      ...raw,
+      namespaceBaseRoot: config.roots.runtime.namespaceBaseRoot,
+    }, null, 2)}\n`,
+    "utf8",
+  );
+
+  return launchConfigPath;
 }
 
 function toPosixPath(value: string): string {
@@ -850,7 +869,7 @@ export async function packMac(config: ToolPackConfig): Promise<MacPackResult> {
   };
 }
 
-export { resolveSeededAppConfigPaths, seedPackagedAppConfig };
+export { prepareMacLaunchConfig, resolveSeededAppConfigPaths, seedPackagedAppConfig };
 
 function desktopStamp(config: ToolPackConfig): SidecarStamp {
   return {
@@ -1131,6 +1150,7 @@ export async function installPackedMacDmg(config: ToolPackConfig): Promise<MacIn
 
 export async function startPackedMacApp(config: ToolPackConfig): Promise<MacStartResult> {
   const target = await resolvePackedMacStartTarget(config);
+  const launchConfigPath = await prepareMacLaunchConfig(config);
   const stamp = desktopStamp(config);
   const logPath = desktopLogPath(config);
   await mkdir(dirname(logPath), { recursive: true });
@@ -1146,6 +1166,7 @@ export async function startPackedMacApp(config: ToolPackConfig): Promise<MacStar
       extraEnv: {
         ...process.env,
         [DESKTOP_LOG_ECHO_ENV]: "0",
+        [PACKAGED_CONFIG_PATH_ENV]: launchConfigPath,
       },
       stamp,
     }),

@@ -5,7 +5,11 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { ToolPackConfig } from "../src/config.js";
-import { resolveSeededAppConfigPaths, seedPackagedAppConfig } from "../src/mac.js";
+import {
+  prepareMacLaunchConfig,
+  resolveSeededAppConfigPaths,
+  seedPackagedAppConfig,
+} from "../src/mac.js";
 
 function makeConfig(root: string, overrides: Partial<ToolPackConfig> = {}): ToolPackConfig {
   return {
@@ -127,6 +131,35 @@ describe("seedPackagedAppConfig", () => {
       await expect(
         readFile(join(config.roots.runtime.namespaceRoot, "data", "app-config.json"), "utf8"),
       ).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+});
+
+describe("prepareMacLaunchConfig", () => {
+  it("writes a runtime launch config with namespaceBaseRoot for portable builds", async () => {
+    const root = await mkdtemp(join(tmpdir(), "open-design-tools-pack-mac-"));
+    try {
+      const config = makeConfig(root, { portable: true });
+      const namespaceRoot = join(root, ".tmp", "tools-pack", "out", "mac", "namespaces", "local-test");
+      await mkdir(namespaceRoot, { recursive: true });
+      await writeFile(
+        join(namespaceRoot, "open-design-config.json"),
+        `${JSON.stringify({
+          appVersion: "0.4.2",
+          namespace: "local-test",
+          nodeCommandRelative: "open-design/bin/node",
+          webOutputMode: "standalone",
+        }, null, 2)}\n`,
+        "utf8",
+      );
+
+      const launchConfigPath = await prepareMacLaunchConfig(config);
+      const launchConfig = JSON.parse(await readFile(launchConfigPath, "utf8")) as { namespaceBaseRoot?: string };
+
+      expect(launchConfigPath).toBe(join(config.roots.runtime.namespaceRoot, "open-design-config.json"));
+      expect(launchConfig.namespaceBaseRoot).toBe(config.roots.runtime.namespaceBaseRoot);
     } finally {
       await rm(root, { force: true, recursive: true });
     }

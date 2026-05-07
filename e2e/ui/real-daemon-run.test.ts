@@ -1,68 +1,23 @@
 import { expect, test } from '@playwright/test';
 import type { Page, Response } from '@playwright/test';
-import { chmod, mkdir, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
+import {
+  createFakeAgentRuntimes,
+  FAKE_AGENT_RUNTIME_IDS,
+} from '@/playwright/fake-agents';
+import type { FakeAgentId } from '@/playwright/fake-agents';
 
 const STORAGE_KEY = 'open-design:config';
-const FAKE_CODEX_DIR = path.join(tmpdir(), `open-design-playwright-fake-codex-${process.pid}`);
-const FAKE_CODEX_SCRIPT = path.join(FAKE_CODEX_DIR, 'codex-e2e.js');
-const FAKE_CODEX_BIN =
-  process.platform === 'win32' ? path.join(FAKE_CODEX_DIR, 'codex-e2e.cmd') : FAKE_CODEX_SCRIPT;
 const GENERATED_FILE = 'real-daemon-smoke.html';
 const GENERATED_HEADING = 'Real Daemon Smoke';
 const CHUNKED_FILE = 'chunked-daemon-smoke.html';
 const CHUNKED_HEADING = 'Chunked Daemon Smoke';
 const FOLLOW_UP_FILE = 'follow-up-daemon-smoke.html';
+let fakeRuntimes: Awaited<ReturnType<typeof createFakeAgentRuntimes>>;
+
+test.describe.configure({ mode: 'serial' });
 
 test.beforeAll(async () => {
-  await mkdir(FAKE_CODEX_DIR, { recursive: true });
-  await writeFile(
-    FAKE_CODEX_SCRIPT,
-    `#!/usr/bin/env node
-if (process.argv.includes('--version')) {
-  process.stdout.write('codex-e2e 0.0.0\\n');
-  process.exit(0);
-}
-process.stdin.resume();
-process.stdin.setEncoding('utf8');
-let prompt = '';
-process.stdin.on('data', (chunk) => { prompt += chunk; });
-process.stdin.on('end', () => {
-  if (prompt.includes('Return an intentional daemon smoke failure')) {
-    process.stdout.write(JSON.stringify({ type: 'thread.started' }) + '\\n');
-    process.stdout.write(JSON.stringify({ type: 'turn.started' }) + '\\n');
-    process.stdout.write(JSON.stringify({ type: 'turn.failed', error: { message: 'intentional fake codex failure' } }) + '\\n');
-    process.exit(0);
-  }
-  const isChunked = prompt.includes('Create a chunked deterministic smoke artifact');
-  const isFollowUp = prompt.includes('Create a follow-up deterministic smoke artifact');
-  const heading = isChunked ? '${CHUNKED_HEADING}' : isFollowUp ? 'Follow-up Daemon Smoke' : '${GENERATED_HEADING}';
-  const fileText = isChunked ? 'Chunked through the daemon run path.' : isFollowUp ? 'Generated after an earlier daemon turn.' : 'Generated through the daemon run path.';
-  const identifier = isChunked ? 'chunked-daemon-smoke' : isFollowUp ? 'follow-up-daemon-smoke' : 'real-daemon-smoke';
-  const html = '<!doctype html><html><body><main><h1>' + heading + '</h1><p>' + fileText + '</p></main></body></html>';
-  const artifact = '<artifact identifier="' + identifier + '" type="text/html" title="' + heading + '">' + html + '</artifact>';
-  const events = [
-    { type: 'thread.started' },
-    { type: 'turn.started' },
-    ...(isChunked
-      ? [
-          { type: 'item.completed', item: { type: 'agent_message', text: artifact.slice(0, Math.ceil(artifact.length / 2)) } },
-          { type: 'item.completed', item: { type: 'agent_message', text: artifact.slice(Math.ceil(artifact.length / 2)) } },
-        ]
-      : [{ type: 'item.completed', item: { type: 'agent_message', text: artifact + '\\nPrompt included: ' + String(prompt.includes('Create a deterministic smoke artifact') || isFollowUp) } }]),
-    { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
-  ];
-  for (const event of events) process.stdout.write(JSON.stringify(event) + '\\n');
-});
-`,
-    'utf8',
-  );
-  if (process.platform === 'win32') {
-    await writeFile(FAKE_CODEX_BIN, '@echo off\r\nnode "%~dp0codex-e2e.js" %*\r\n', 'utf8');
-  } else {
-    await chmod(FAKE_CODEX_BIN, 0o755);
-  }
+  fakeRuntimes = await createFakeAgentRuntimes();
 });
 
 test.beforeEach(async ({ page }) => {
@@ -70,7 +25,7 @@ test.beforeEach(async ({ page }) => {
 
   await resetDaemonAppConfig(page);
 
-  await page.addInitScript(({ key, codexBin }) => {
+  await page.addInitScript(({ key, codexEnv }) => {
     window.localStorage.setItem(
       key,
       JSON.stringify({
@@ -83,22 +38,12 @@ test.beforeEach(async ({ page }) => {
         designSystemId: null,
         onboardingCompleted: true,
         agentModels: { codex: { model: 'default', reasoning: 'default' } },
-        agentCliEnv: { codex: { CODEX_BIN: codexBin } },
+        agentCliEnv: { codex: codexEnv },
       }),
     );
-  }, { key: STORAGE_KEY, codexBin: FAKE_CODEX_BIN });
+  }, { key: STORAGE_KEY, codexEnv: fakeRuntimes.codex.env });
 
-  const response = await page.request.put('/api/app-config', {
-    data: {
-      onboardingCompleted: true,
-      agentId: 'codex',
-      agentModels: { codex: { model: 'default', reasoning: 'default' } },
-      agentCliEnv: { codex: { CODEX_BIN: FAKE_CODEX_BIN } },
-      skillId: null,
-      designSystemId: null,
-    },
-  });
-  expect(response.ok()).toBeTruthy();
+  await configureFakeAgent(page, 'codex');
 });
 
 test.afterEach(async ({ page }) => {
@@ -118,13 +63,7 @@ test('real daemon run streams, persists, and previews an artifact', async ({ pag
   await expect(frame.getByRole('heading', { name: GENERATED_HEADING })).toBeVisible();
 
   const { projectId } = currentProject(page);
-  await expect
-    .poll(async () => {
-      const response = await page.request.get(`/api/projects/${projectId}/files/${GENERATED_FILE}`);
-      if (!response.ok()) return '';
-      return response.text();
-    })
-    .toContain(GENERATED_HEADING);
+  await expectProjectFileToContain(page, projectId, GENERATED_FILE, GENERATED_HEADING);
 });
 
 test('real daemon run persists an artifact streamed across multiple chunks', async ({ page }) => {
@@ -139,13 +78,7 @@ test('real daemon run persists an artifact streamed across multiple chunks', asy
   await expect(frame.getByRole('heading', { name: CHUNKED_HEADING })).toBeVisible();
 
   const { projectId } = currentProject(page);
-  await expect
-    .poll(async () => {
-      const response = await page.request.get(`/api/projects/${projectId}/files/${CHUNKED_FILE}`);
-      if (!response.ok()) return '';
-      return response.text();
-    })
-    .toContain(CHUNKED_HEADING);
+  await expectProjectFileToContain(page, projectId, CHUNKED_FILE, CHUNKED_HEADING);
 });
 
 test('real daemon run surfaces process/parser errors in chat', async ({ page }) => {
@@ -176,13 +109,47 @@ test('real daemon run supports a follow-up turn in the same project', async ({ p
   const { files } = (await response.json()) as { files: Array<{ name: string }> };
   expect(files.map((file) => file.name)).toEqual(expect.arrayContaining([GENERATED_FILE, FOLLOW_UP_FILE]));
 
-  await expect
-    .poll(async () => {
-      const response = await page.request.get(`/api/projects/${projectId}/files/${FOLLOW_UP_FILE}`);
-      if (!response.ok()) return '';
-      return response.text();
-    })
-    .toContain('Generated after an earlier daemon turn.');
+  await expectProjectFileToContain(page, projectId, FOLLOW_UP_FILE, 'Generated after an earlier daemon turn.');
+});
+
+test('real daemon run previews an artifact from a fake OpenCode runtime', async ({ page }) => {
+  await configureFakeAgent(page, 'opencode');
+  await page.goto('/');
+  await setBrowserAgentConfig(page, 'opencode');
+  await page.reload();
+  await createProject(page, 'Fake OpenCode runtime smoke');
+  await expectWorkspaceReady(page);
+
+  await sendPrompt(page, 'Fake runtime smoke for opencode');
+
+  const fileName = 'fake-agent-runtime-opencode.html';
+  const heading = 'Fake Agent Runtime opencode';
+  await expect(page.getByText(fileName, { exact: true })).toBeVisible({ timeout: 15_000 });
+  const frame = page.frameLocator('[data-testid="artifact-preview-frame"]');
+  await expect(frame.getByRole('heading', { name: heading })).toBeVisible();
+
+  const { projectId } = currentProject(page);
+  await expectProjectFileToContain(page, projectId, fileName, heading);
+});
+
+test('real daemon run supports fake non-Codex runtime protocols', async ({ page }) => {
+  test.setTimeout(180_000);
+
+  for (const agentId of FAKE_AGENT_RUNTIME_IDS) {
+    await test.step(agentId, async () => {
+      await configureFakeAgent(page, agentId);
+      const projectId = `fake-runtime-${agentId}-${Date.now()}`.replace(/[^A-Za-z0-9._-]/g, '-');
+      const { conversationId } = await createProjectViaApi(page, projectId, `Fake ${agentId} runtime smoke`);
+
+      expect(conversationId).toBeTruthy();
+      await startRunAndWaitForSuccess(page, {
+        agentId,
+        projectId,
+        conversationId,
+        message: `Fake runtime smoke for ${agentId}`,
+      });
+    });
+  }
 });
 
 async function createProject(page: Page, name: string) {
@@ -190,6 +157,21 @@ async function createProject(page: Page, name: string) {
   await page.getByTestId('new-project-tab-prototype').click();
   await page.getByTestId('new-project-name').fill(name);
   await page.getByTestId('create-project').click();
+}
+
+async function createProjectViaApi(page: Page, projectId: string, name: string) {
+  const response = await page.request.post('/api/projects', {
+    data: {
+      id: projectId,
+      name,
+      skillId: null,
+      designSystemId: null,
+      pendingPrompt: null,
+      metadata: { kind: 'prototype' },
+    },
+  });
+  expect(response.ok()).toBeTruthy();
+  return (await response.json()) as { conversationId: string };
 }
 
 async function expectWorkspaceReady(page: Page) {
@@ -206,12 +188,45 @@ async function sendPrompt(page: Page, prompt: string) {
   await input.fill(prompt);
   await expect(input).toHaveValue(prompt);
   await expect(sendButton).toBeEnabled();
-  const chatResponse = page.waitForResponse(
-    isCreateRunResponse,
-  );
+  const chatResponse = page.waitForResponse(isCreateRunResponse);
   await sendButton.click();
   const response = await chatResponse;
   expect(response.ok()).toBeTruthy();
+}
+
+async function configureFakeAgent(page: Page, agentId: FakeAgentId) {
+  const runtime = fakeRuntimes[agentId];
+  const response = await page.request.put('/api/app-config', {
+    data: {
+      onboardingCompleted: true,
+      agentId,
+      agentModels: { [agentId]: { model: 'default', reasoning: 'default' } },
+      agentCliEnv: { [agentId]: runtime.env },
+      skillId: null,
+      designSystemId: null,
+    },
+  });
+  expect(response.ok()).toBeTruthy();
+}
+
+async function setBrowserAgentConfig(page: Page, agentId: FakeAgentId) {
+  await page.evaluate(({ key, id, env }) => {
+    window.localStorage.setItem(
+      key,
+      JSON.stringify({
+        mode: 'daemon',
+        apiKey: '',
+        baseUrl: 'https://api.anthropic.com',
+        model: 'claude-sonnet-4-5',
+        agentId: id,
+        skillId: null,
+        designSystemId: null,
+        onboardingCompleted: true,
+        agentModels: { [id]: { model: 'default', reasoning: 'default' } },
+        agentCliEnv: { [id]: env },
+      }),
+    );
+  }, { key: STORAGE_KEY, id: agentId, env: fakeRuntimes[agentId].env });
 }
 
 async function resetDaemonAppConfig(page: Page) {
@@ -226,6 +241,53 @@ async function resetDaemonAppConfig(page: Page) {
     },
   });
   expect(response.ok()).toBeTruthy();
+}
+
+async function startRunAndWaitForSuccess(
+  page: Page,
+  options: { agentId: FakeAgentId; projectId: string; conversationId: string; message: string },
+) {
+  const requestId = `fake-${options.agentId}-${Date.now()}`;
+  const response = await page.request.post('/api/runs', {
+    data: {
+      agentId: options.agentId,
+      message: options.message,
+      projectId: options.projectId,
+      conversationId: options.conversationId,
+      assistantMessageId: `assistant-${requestId}`,
+      clientRequestId: requestId,
+      skillId: null,
+      designSystemId: null,
+      model: 'default',
+      reasoning: 'default',
+    },
+  });
+  expect(response.ok()).toBeTruthy();
+  const { runId } = (await response.json()) as { runId: string };
+
+  await expect
+    .poll(async () => {
+      const status = await page.request.get(`/api/runs/${runId}`);
+      if (!status.ok()) return `http-${status.status()}`;
+      const body = (await status.json()) as { status: string };
+      return body.status;
+    }, { timeout: 20_000 })
+    .toBe('succeeded');
+}
+
+async function expectProjectFileToContain(
+  page: Page,
+  projectId: string,
+  fileName: string,
+  expected: string,
+) {
+  await expect
+    .poll(async () => {
+      const response = await page.request.get(`/api/projects/${projectId}/files/${fileName}`);
+      if (!response.ok()) return '';
+      return response.text();
+    }, { timeout: 15_000 })
+    .toContain(expected);
 }
 
 function isCreateRunResponse(response: Response): boolean {

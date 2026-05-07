@@ -263,6 +263,7 @@ describe('app-config', () => {
           },
           codex: {
             CODEX_HOME: '~/.codex-alt',
+            CODEX_BIN: '~/bin/codex-next',
             OPENAI_API_KEY: 'sk-should-not-persist',
           },
           gemini: {
@@ -278,7 +279,7 @@ describe('app-config', () => {
 
       expect(cfg.agentCliEnv).toEqual({
         claude: { CLAUDE_CONFIG_DIR: '~/.claude-2' },
-        codex: { CODEX_HOME: '~/.codex-alt' },
+        codex: { CODEX_HOME: '~/.codex-alt', CODEX_BIN: '~/bin/codex-next' },
       });
     });
 

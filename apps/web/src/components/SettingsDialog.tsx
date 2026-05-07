@@ -67,7 +67,7 @@ interface Props {
   appVersionInfo: AppVersionInfo | null;
   welcome?: boolean;
   initialSection?: SettingsSection;
-  onSave: (cfg: AppConfig) => void;
+  onSave: (cfg: AppConfig, closeModal?: boolean) => Promise<{ success: boolean }> | void;
   onClose: () => void;
   onRefreshAgents: (
     options?: AgentRefreshOptions,
@@ -204,6 +204,12 @@ const AGENT_CLI_ENV_FIELDS = [
     envKey: 'CODEX_HOME',
     labelKey: 'settings.cliEnvCodexHome',
     placeholder: '~/.codex-alt',
+  },
+  {
+    agentId: 'codex',
+    envKey: 'CODEX_BIN',
+    labelKey: 'settings.cliEnvCodexBin',
+    placeholder: '/absolute/path/to/codex',
   },
 ] as const;
 
@@ -1710,7 +1716,7 @@ export function SettingsDialog({
             type="button"
             className="primary"
             disabled={!canSave}
-            onClick={() => onSave(cfg)}
+            onClick={() => onSave(cfg, activeSection !== 'composio')}
           >
             {welcome ? t('settings.getStarted') : t('common.save')}
           </button>
@@ -1718,6 +1724,34 @@ export function SettingsDialog({
       </div>
     </div>
   );
+}
+
+/**
+ * The four UI states the Composio API key field can be in.
+ *
+ * `saved-pending` exists so the saved-key indicator stays visible while
+ * the user types a draft replacement. Previously the badge was tied to
+ * `!hasPendingEdit`, which made it vanish on the first keystroke and
+ * trained users to think the original key had already been overwritten
+ * (issue #741). Treating "saved key plus draft" as its own state lets
+ * the badge stay anchored while the hint text differentiates the
+ * unsaved replacement from a fully-saved value.
+ */
+export type ComposioCredentialState =
+  | 'empty'
+  | 'pending-new'
+  | 'saved'
+  | 'saved-pending';
+
+export function deriveComposioCredentialState(
+  composio: { apiKey?: string; apiKeyConfigured?: boolean } | null | undefined,
+): ComposioCredentialState {
+  const hasPendingEdit = Boolean(composio?.apiKey?.trim());
+  const hasSavedKey = Boolean(composio?.apiKeyConfigured);
+  if (hasSavedKey && hasPendingEdit) return 'saved-pending';
+  if (hasSavedKey) return 'saved';
+  if (hasPendingEdit) return 'pending-new';
+  return 'empty';
 }
 
 function ConnectorSection({
@@ -1732,10 +1766,9 @@ function ConnectorSection({
   const updateComposio = (patch: NonNullable<AppConfig['composio']>) => {
     setCfg((curr) => ({ ...curr, composio: { ...(curr.composio ?? {}), ...patch } }));
   };
-  const hasPendingEdit = Boolean(composio.apiKey?.trim());
-  const savedApiKeyConfigured = Boolean(composio.apiKeyConfigured);
-  const apiKeyConfigured = Boolean(hasPendingEdit || savedApiKeyConfigured);
-  const isSavedState = savedApiKeyConfigured && !hasPendingEdit;
+  const credentialState = deriveComposioCredentialState(composio);
+  const hasSavedKey = credentialState === 'saved' || credentialState === 'saved-pending';
+  const apiKeyConfigured = credentialState !== 'empty';
   const tail = composio.apiKeyTail?.trim();
 
   // The credentials field sits ABOVE the embedded catalog so the user lands
@@ -1764,7 +1797,7 @@ function ConnectorSection({
         <span className="field-label-row">
           <span className="field-label-group">
             <span className="field-label">Composio API Key</span>
-            {isSavedState ? (
+            {hasSavedKey ? (
               <span className="field-status-badge" title="Saved to local daemon">
                 {tail ? `Saved · ••••${tail}` : 'Saved'}
               </span>
@@ -1785,7 +1818,7 @@ function ConnectorSection({
             ref={apiKeyInputRef}
             type="password"
             value={composio.apiKey ?? ''}
-            placeholder={isSavedState ? 'Paste a new key to replace the saved one' : 'Paste Composio API key'}
+            placeholder={hasSavedKey ? 'Paste a new key to replace the saved one' : 'Paste Composio API key'}
             onChange={(e) => updateComposio({ apiKey: e.target.value })}
             aria-describedby="composio-api-key-help"
           />
@@ -1799,16 +1832,18 @@ function ConnectorSection({
           </button>
         </div>
         <span id="composio-api-key-help" className="hint">
-          {isSavedState
-            ? 'Your key unlocks the catalog below and stays in the local daemon. Paste a new key to replace it, or Clear to remove.'
-            : apiKeyConfigured
-              ? 'Unsaved changes — click Save to store this key in the local daemon and unlock the catalog below.'
-              : 'Add a key to unlock the catalog below. Keys are stored locally in the daemon and never sent through environment variables.'}
+          {credentialState === 'saved-pending'
+            ? 'Unsaved replacement. Click Save to overwrite the saved key, or Clear to discard the draft and the saved key.'
+            : credentialState === 'saved'
+              ? 'Your key stays in the local daemon. Paste a new key above to replace it, or Clear to remove.'
+              : credentialState === 'pending-new'
+                ? 'Unsaved changes. Click Save to store this key in the local daemon.'
+                : 'Keys are stored locally in the daemon and never sent through environment variables.'}
         </span>
       </label>
 
       <ConnectorsBrowser
-        composioConfigured={savedApiKeyConfigured}
+        composioConfigured={hasSavedKey}
         onFocusComposioCredentials={focusComposioCredentials}
       />
     </section>
@@ -2607,8 +2642,8 @@ function MediaProvidersSection({
 // to the local config for you. Verified against each tool's official
 // docs in May 2026.
 //
-// Important: every snippet uses absolute paths to `node` and the
-// daemon's built cli.js, fetched from the daemon at runtime. macOS
+// Important: every snippet uses absolute paths to the daemon's current
+// Node-compatible runtime and built cli.js, fetched at runtime. macOS
 // and Linux ship a system /usr/bin/od (octal-dump) that shadows any
 // `od` we might add to PATH, and most Open Design users run from
 // source where `od` is not installed globally. The installer panel
@@ -2625,11 +2660,18 @@ type McpClientId =
 interface McpInstallInfo {
   command: string;
   args: string[];
+  env?: Record<string, string>;
   daemonUrl: string;
   platform: 'darwin' | 'linux' | 'win32' | string;
   cliExists: boolean;
   nodeExists: boolean;
   buildHint: string | null;
+}
+
+interface McpStdioServerConfig {
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
 }
 
 interface McpClient {
@@ -2683,8 +2725,26 @@ function utf8Btoa(s: string): string {
   return btoa(bin);
 }
 
+function buildMcpStdioServerConfig(info: McpInstallInfo): McpStdioServerConfig {
+  const env = info.env && Object.keys(info.env).length > 0 ? info.env : undefined;
+  return {
+    command: info.command,
+    args: info.args,
+    ...(env ? { env } : {}),
+  };
+}
+
+function buildCodexEnvToml(info: McpInstallInfo): string {
+  const entries = Object.entries(info.env ?? {});
+  if (entries.length === 0) return '';
+  return `
+
+[mcp_servers.open-design.env]
+${entries.map(([key, value]) => `${key} = ${JSON.stringify(value)}`).join('\n')}`;
+}
+
 function buildSharedMcpJson(info: McpInstallInfo): string {
-  const inner = { command: info.command, args: info.args };
+  const inner = buildMcpStdioServerConfig(info);
   const innerJson = JSON.stringify(inner, null, 2)
     .split('\n')
     .map((line, i) => (i === 0 ? line : `    ${line}`))
@@ -2710,7 +2770,7 @@ const MCP_CLIENTS: McpClient[] = [
     buildMethod: () => 'CLI command',
     buildInstruction: () => 'Run this in your terminal.',
     buildSnippet: (info) => {
-      const inner = JSON.stringify({ command: info.command, args: info.args });
+      const inner = JSON.stringify(buildMcpStdioServerConfig(info));
       return `claude mcp add-json --scope user open-design '${inner}'`;
     },
     buildSnippetLang: () => 'bash',
@@ -2739,7 +2799,7 @@ const MCP_CLIENTS: McpClient[] = [
     },
     buildSnippet: (info) => `[mcp_servers.open-design]
 command = ${JSON.stringify(info.command)}
-args = ${JSON.stringify(info.args)}`,
+args = ${JSON.stringify(info.args)}${buildCodexEnvToml(info)}`,
     buildSnippetLang: () => 'toml',
   },
   {
@@ -2751,7 +2811,7 @@ args = ${JSON.stringify(info.args)}`,
     buildSnippet: buildSharedMcpJson,
     buildSnippetLang: () => 'json',
     buildDeeplink: (info) => {
-      const inner = { command: info.command, args: info.args };
+      const inner = buildMcpStdioServerConfig(info);
       // Cursor expects the inner server-config object base64-encoded
       // as ?config=...; the handler decodes it and pops an approval
       // dialog before writing to mcp.json. We UTF-8-encode first so
@@ -2773,7 +2833,8 @@ args = ${JSON.stringify(info.args)}`,
     "open-design": {
       "type": "stdio",
       "command": ${JSON.stringify(info.command)},
-      "args": ${JSON.stringify(info.args)}
+      "args": ${JSON.stringify(info.args)}${info.env && Object.keys(info.env).length > 0 ? `,
+      "env": ${JSON.stringify(info.env)}` : ''}
     }
   }
 }`,
@@ -2799,7 +2860,8 @@ args = ${JSON.stringify(info.args)}`,
     "open-design": {
       "source": "custom",
       "command": ${JSON.stringify(info.command)},
-      "args": ${JSON.stringify(info.args)}
+      "args": ${JSON.stringify(info.args)}${info.env && Object.keys(info.env).length > 0 ? `,
+      "env": ${JSON.stringify(info.env)}` : ''}
     }
   }
 }`,

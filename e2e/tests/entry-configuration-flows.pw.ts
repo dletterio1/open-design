@@ -112,7 +112,7 @@ test('prompt template retry preserves the edited body in project metadata', asyn
     });
   });
 
-  await page.goto('/');
+  await gotoEntryHome(page);
   await page.getByTestId('new-project-tab-image').click();
   await page.getByTestId('new-project-name').fill('Prompt template retry metadata');
 
@@ -144,7 +144,7 @@ test('prompt template retry preserves the edited body in project metadata', asyn
 test('live artifact empty connector CTA opens the gated connector setup path', async ({ page }) => {
   await routeConnectors(page, []);
 
-  await page.goto('/');
+  await gotoEntryHome(page);
   await page.getByTestId('new-project-tab-live-artifact').click();
   await expect(page.getByTestId('new-project-connectors')).toBeVisible();
 
@@ -162,7 +162,7 @@ test('live artifact empty connector CTA opens the gated connector setup path', a
 test('connectors search supports empty results and keyboard-closeable details', async ({ page }) => {
   await routeConnectors(page, CONNECTORS);
 
-  await page.goto('/');
+  await gotoEntryHome(page);
   await page.getByTestId('entry-tab-connectors').click();
   await expect(page.getByTestId('connector-grid-wrap')).toBeVisible();
 
@@ -209,6 +209,11 @@ async function routeConnectors(page: Page, connectors: typeof CONNECTORS) {
       },
     });
   });
+}
+
+async function gotoEntryHome(page: Page) {
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('new-project-panel')).toBeVisible();
 }
 
 function connectorCard(page: Page, id: string) {

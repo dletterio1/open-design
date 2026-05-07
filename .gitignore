@@ -6,9 +6,9 @@ out/
 .tmp/
 .DS_Store
 *.log
+*.exe
 .vite
 .astro/
-.vscode
 
 # Local runtime data — auto-created by the daemon on first start.
 # Holds app.sqlite (project metadata), projects/<id>/ (per-project artifacts,
@@ -50,3 +50,4 @@ tsconfig.tsbuildinfo
 task.md
 specs/change/active
 .ralph/
+config.bat

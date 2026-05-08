@@ -51,10 +51,9 @@ tsconfig.tsbuildinfo
 task.md
 specs/change/active
 .ralph/
-<<<<<<< Updated upstream
-
 # Local design assistant context
 .impeccable.md
-=======
+
+# GitNexus index (local tooling)
 .gitnexus
->>>>>>> Stashed changes
+config.bat

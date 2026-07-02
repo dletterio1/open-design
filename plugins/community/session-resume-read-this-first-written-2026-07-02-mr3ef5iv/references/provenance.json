@@ -1,0 +1,19 @@
+{
+  "candidateId": "fb14916a-8407-4371-aca9-beba8273c66e",
+  "projectId": "37c48675-3b4a-4d26-adb3-f4c02d587d11",
+  "runId": "fda62af4-6687-407a-a36c-1f3771b9cc85",
+  "conversationId": "e509f70b-14d3-4f93-b3f8-f84044fd66dc",
+  "provenance": {
+    "summary": "Detected from SESSION-RESUME.md after a successful run.",
+    "detectedAt": 1782990201003
+  },
+  "sourceRefs": [
+    {
+      "kind": "file",
+      "value": "SESSION-RESUME.md",
+      "label": "SESSION-RESUME.md",
+      "size": 6414,
+      "copied": true
+    }
+  ]
+}

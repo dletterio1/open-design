@@ -1,0 +1,22 @@
+{
+  "$schema": "https://open-design.ai/schemas/plugin.v1.json",
+  "specVersion": "1.0.0",
+  "name": "session-resume-read-this-first-written-2026-07-02-mr3ef5iv",
+  "title": "SESSION-RESUME — read this first (written 2026-07-02)",
+  "version": "0.1.0",
+  "description": "The previous session (1e8d08a5) died from context overflow (\"Prompt is too long\") mid-execution. This file is the recovered handoff. Everything below was verified against disk, not memory.",
+  "od": {
+    "kind": "skill",
+    "taskKind": "new-generation",
+    "context": {
+      "skills": [
+        {
+          "path": "./SKILL.md"
+        }
+      ]
+    },
+    "capabilities": [
+      "prompt:inject"
+    ]
+  }
+}
